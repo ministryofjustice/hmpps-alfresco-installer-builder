@@ -1,0 +1,262 @@
+---
+
+- block:
+    - name: Define our version number if the env var is set
+      set_fact:
+        version_number: "{{ alfresco_version_number }}"
+  when: alfresco_version_number|default(false)
+
+- name: Get our ghostscript version
+  command: "ghostscript --version"
+  register: gs_version
+  no_log: true
+
+- name: Set directory locations
+  set_fact:
+    alfresco_libs: /usr/share/tomcat/shared/lib
+    alfresco_licence: /usr/share/tomcat/shared/classes/alfresco/extension/license
+    alfresco_cache: /srv/cache
+    alfresco_data: /srv/alf_data
+    alfresco_content: /srv/alf_data/contentstore
+    alfresco_del_content: /srv/alf_data/contentstore.deleted
+    tomcat_root: /usr/share/tomcat
+    tomcat_web_ext: /usr/share/tomcat/shared/classes/alfresco/web-extension
+    tomcat_service: /opt/tomcat/bin
+    alfresco_log_dir: /var/log/alfresco
+  no_log: true
+
+- name: Set template facts
+  set_fact:
+    multicast_group: 224.0.0.1
+    ghostscript_ver: "{{ gs_version.stdout }}"
+
+- name: Create required directories for alfresco
+  file:
+    state: directory
+    path: "{{ item }}"
+  with_items:
+    - "{{ alfresco_libs }}"
+    - "{{ alfresco_licence }}"
+    - "{{ alfresco_cache }}"
+    - "{{ alfresco_data }}"
+    - "{{ tomcat_web_ext }}"
+    - "{{ tomcat_service }}"
+    - "{{ alfresco_log_dir }}"
+
+- name: Set permissions on cache and content and data dirs
+  file:
+    dest: "{{ item }}"
+    owner: tomcat
+    group: tomcat
+    recurse: true
+  with_items:
+    - "{{ alfresco_cache }}"
+    - "{{ alfresco_data }}"
+    - "{{ alfresco_log_dir }}"
+
+- name: Get our alfresco zips, amps and license
+  aws_s3:
+    bucket: "{{ artifact_bucket }}"
+    object: "/alfresco/{{ item }}"
+    dest: "/tmp/{{ item }}"
+    mode: get
+  with_items:
+    - alfresco-content-services-platform-distributionzip-5.2.3.zip
+    - alfresco-content-services-share-distribution-5.2.3.zip
+    - alfresco-ent-5.2-NOMS.lic
+    - alfresco-s3-connector-2.1.0.amp
+    - _vti_bin.war
+
+- name: Move vti_bin_war_file to the correct directory
+  copy:
+    src: "/tmp/_vti_bin.war"
+    dest: "/usr/share/tomcat/webapps/_vti_bin.war"
+    remote_src: true
+
+- name: Get our build artifacts
+  aws_s3:
+    bucket: "{{ alfresco_artifact_bucket }}"
+    object: "/alfresco/{{ item }}"
+    dest: "/tmp/{{ item }}"
+    mode: get
+    retries: 3
+  with_items:
+    - "alfresco-{{ version_number | default('2.11.2') }}-NOSPEC.noarch.rpm"
+    - "alfresco-{{ version_number | default('2.11.2') }}-NOSPEC.noarch.rpm.md5"
+    - "share-{{ version_number | default('2.11.2') }}-NOSPEC.noarch.rpm"
+    - "share-{{ version_number | default('2.11.2') }}-NOSPEC.noarch.rpm.md5"
+  when: not skip_customisation|default(false)
+
+- name: Compare our artifacts with their md5sums
+  command: "md5sum -c {{ item }}-NOSPEC.noarch.rpm.md5"
+  args:
+    warn: false
+    chdir: /tmp
+  with_items:
+    - "alfresco-{{ version_number | default('2.11.2') }}"
+    - "share-{{ version_number | default('2.11.2') }}"
+
+- name: Uncompress our installers
+  unarchive:
+    src: "/tmp/{{ item }}"
+    dest: "/tmp"
+    remote_src: true
+  with_items:
+    - alfresco-content-services-platform-distributionzip-5.2.3.zip
+    - alfresco-content-services-share-distribution-5.2.3.zip
+
+- name: Copy folders to the correct location
+  shell: "cp -ru /tmp/{{ item.src }} {{ item.dest }}"
+  with_items:
+    - { src: "alfresco-content-services-platform-distributionzip-5.2.3/alf_data", dest: "/srv" }
+    - { src: "alfresco-content-services-share-distribution-5.2.3/alf_data", dest: "/srv" }
+    - { src: "alfresco-content-services-platform-distributionzip-5.2.3/bin/*", dest: "{{ tomcat_root }}/bin" }
+    - { src: "alfresco-content-services-platform-distributionzip-5.2.3/bin/*", dest: "{{ tomcat_root }}/bin" }
+    - { src: "alfresco-content-services-platform-distributionzip-5.2.3/web-server/conf/*", dest: "{{ tomcat_root }}/conf" }
+    - { src: "alfresco-content-services-platform-distributionzip-5.2.3/web-server/lib/*", dest: "{{ tomcat_root }}/lib" }
+    - { src: "alfresco-content-services-platform-distributionzip-5.2.3/web-server/shared/*", dest: "{{ tomcat_root }}/shared" }
+    - { src: "alfresco-content-services-platform-distributionzip-5.2.3/web-server/webapps/*", dest: "{{ tomcat_root }}/webapps" }
+    - { src: "alfresco-content-services-share-distribution-5.2.3/web-server/conf/*", dest: "{{ tomcat_root }}/conf" }
+    - { src: "alfresco-content-services-share-distribution-5.2.3/web-server/webapps/*", dest: "{{ tomcat_root }}/webapps" }
+
+- name: Move our license to the correct directory
+  copy:
+    src: "/tmp/alfresco-ent-{{ alfresco_version|default('5.2') }}-NOMS.lic"
+    dest: "{{ alfresco_licence }}"
+    remote_src: true
+
+- name: Uncompress the pdf-renderer
+  unarchive:
+    src: "/tmp/alfresco-content-services-platform-distributionzip-5.2.3/alfresco-pdf-renderer/alfresco-pdf-renderer-1.0-linux.tgz"
+    dest: "/tmp"
+    remote_src: true
+
+- name: Move our pdf renderer to somewhere sane
+  command: "mv /tmp/alfresco-pdf-renderer /usr/sbin/."
+  args:
+    warn: false
+
+- name: Make our renderer executable
+  command: "chmod +x /usr/sbin/alfresco-pdf-renderer"
+  args:
+    warn: false
+
+- name: Update our catalina.properties
+  lineinfile:
+    path: "{{ tomcat_root }}/conf/catalina.properties"
+    regexp: "^shared.loader="
+    line: "shared.loader=${catalina.base}/shared/classes,${catalina.base}/shared/lib/*.jar"
+
+- name: Update our config files
+  copy:
+    content: "{{ lookup('file', item.file) }}"
+    dest: "{{ item.dest }}"
+    remote_src: true
+  with_items:
+    - { file: "server.xml", dest: "{{ tomcat_root }}/conf/server.xml" }
+    - { file: "limits.conf", dest: "/etc/security/limits.conf" }
+    - { file: "rsyslog.conf", dest: "/etc/rsyslog.conf" }
+    - { file: "alfresco_audit.conf", dest: "/etc/rsyslog.d/alfresco_audit.conf" }
+    - { file: "alfresco_logrotate.conf", dest: "/etc/logrotate.d/alfresco_audit.conf" }
+    - { file: "share-config-custom.xml", dest: "/usr/share/tomcat/shared/classes/alfresco/web-extension/share-config-custom.xml" }
+
+
+- name: Create our templated config files
+  template:
+    src: "{{ role_path }}/templates/{{ item.file }}"
+    dest: "{{ item.dest }}"
+  with_items:
+    - { file: "alfresco-global.properties", dest: "{{ tomcat_root }}/shared/classes/alfresco-global.properties" }
+    - { file: "custom-slingshot-application-context.xml.j2", dest: "{{ tomcat_web_ext }}/custom-slingshot-application-context.xml" }
+
+- name: Create our setenv.sh
+  copy:
+    content: "{{ lookup('file', 'setenv.sh') }}"
+    dest: "{{ tomcat_root }}/bin/setenv.sh"
+    owner: tomcat
+    group: tomcat
+    mode: u=rwx
+
+- name: Set perms for tomcat
+  file:
+    path: "{{ item }}"
+    owner: tomcat
+    group: tomcat
+    state: directory
+    recurse: true
+  with_items:
+    - "{{ tomcat_root }}"
+    - "{{ alfresco_cache }}"
+    - "{{ alfresco_data }}"
+    - /var/cache/tomcat
+    - /opt/tomcat
+
+- name: Ensure our service is stopped
+  service:
+    name: tomcat
+    state: stopped
+  become: true
+
+- name: Install our customisations
+  yum:
+    name: "/tmp/{{ item }}"
+    state: present
+  with_items:
+    - "alfresco-{{ version_number | default('2.11.2') }}-NOSPEC.noarch.rpm"
+    - "share-{{ version_number | default('2.11.2') }}-NOSPEC.noarch.rpm"
+  when: not skip_customisation|default(false)
+
+- name: Install our plugins
+  command: "java -jar
+            {{ tomcat_root }}/bin/alfresco-mmt.jar
+            install
+            {{ item }}
+            {{ tomcat_root }}/webapps/alfresco.war
+            -force
+            -verbose"
+  with_items:
+    - /tmp/alfresco-s3-connector-2.1.0.amp
+    - /tmp/alfresco-content-services-share-distribution-5.2.3/amps/alfresco-share-services.amp
+  become: true
+
+- name: List our installed plugins
+  command: "java -jar
+            {{ tomcat_root }}/bin/alfresco-mmt.jar
+            list
+            {{ tomcat_root }}/webapps/alfresco.war"
+  register: plugins_stdout
+
+- name: Check our plugins are actually installed
+  set_fact:
+    plugin_installed: "{{ item }}"
+  failed_when: item not in plugins_stdout.stdout
+  with_items:
+    - "org_alfresco_integrations_S3Connector"
+    - "alfresco-share-services"
+
+- name: Clean up
+  file:
+    state: absent
+    path: "/tmp/{{ item }}"
+  with_items:
+    - alfresco-content-services-platform-distributionzip-5.2.3.zip
+    - alfresco-content-services-share-distribution-5.2.3.zip
+    - alfresco-ent-5.2-NOMS.lic
+    - alfresco-content-services-platform-distributionzip-5.2.3
+    - alfresco-content-services-share-distribution-5.2.3
+    - alfresco-s3-connector-2.1.0.amp
+    - "alfresco-{{ version_number|default('2.11.2') }}-NOSPEC.noarch.rpm"
+    - "share-{{ version_number|default('2.11.2') }}-NOSPEC.noarch.rpm"
+    - _vti_bin.war
+  ignore_errors: true
+
+- name: Download our shared session jar files
+  get_url:
+    url: "{{ item }}"
+    dest: "{{ tomcat_root }}/lib/{{ item|basename }}"
+    owner: tomcat
+    group: tomcat
+  with_items:
+    - https://repo1.maven.org/maven2/de/javakaffee/msm/memcached-session-manager/2.3.2/memcached-session-manager-2.3.2.jar
+    - https://repo1.maven.org/maven2/de/javakaffee/msm/memcached-session-manager-tc7/2.3.2/memcached-session-manager-tc7-2.3.2.jar
+    - https://repo1.maven.org/maven2/net/spy/spymemcached/2.12.3/spymemcached-2.12.3.jar

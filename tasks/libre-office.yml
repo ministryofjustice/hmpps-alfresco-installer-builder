@@ -1,0 +1,47 @@
+---
+
+- name: Set libreoffice facts
+  set_fact:
+    libre_office_version: "{{ libre_office_version|default('5.2.1.2') }}"
+    libre_office_url:  "https://downloadarchive.documentfoundation.org/libreoffice/old/{{ libre_office_version|default('5.2.1.2') }}/rpm/x86_64/LibreOffice_{{ libre_office_version|default('5.2.1.2') }}_Linux_x86-64_rpm.tar.gz"
+
+- name: Download libreoffice
+  aws_s3:
+    bucket: "{{ artifact_bucket }}"
+    object: "/alfresco/LibreOffice/{{ item }}"
+    dest: "/tmp/lo_{{ libre_office_version }}.tar.gz"
+    mode: get
+  with_items:
+    - LibreOfficeLibreOffice_{{ libre_office_version }}_Linux_x86-64_rpm.tar.gz
+
+- name: Uncompress our installer
+  unarchive:
+    src: "/tmp/lo_{{ libre_office_version }}.tar.gz"
+    remote_src: true
+    dest: "/tmp/"
+
+- name: Install libreoffice
+  shell: "yum localinstall -y /tmp/LibreOffice_{{ libre_office_version }}_Linux_x86-64_rpm/RPMS/*.rpm"
+  args:
+    warn: false
+
+- name: Cleanup
+  file:
+    state: absent
+    path: "/tmp/{{ item }}"
+  with_items:
+    - "lo_{{ libre_office_version }}.tar.gz"
+    - "LibreOffice_{{ libre_office_version }}_Linux_x86-64_rpm"
+
+- name: Find our soffice.bin file
+  find:
+    paths: /
+    recurse: yes
+    patterns: "soffice.bin"
+    file_type: "file"
+  register: soffice_result
+  failed_when: soffice_result.matched == 0
+
+- name: Set facts
+  set_fact:
+    libre_office_path: "{{ soffice_result.files[0].path }}"
