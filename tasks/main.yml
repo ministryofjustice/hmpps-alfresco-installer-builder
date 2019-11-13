@@ -5,17 +5,17 @@
     file: main.yml
     name: alfresco_vars
 
-- name: Create our application users
-  include: users.yml
-  with_items: "{{ users| default([]) }}"
-  loop_control:
-    loop_var: app_user
+# - name: Create our application users
+#   include: users.yml
+#   with_items: "{{ users| default([]) }}"
+#   loop_control:
+#     loop_var: app_user
 
-- name: Install libre-office
-  include: libre-office.yml
+# - name: Install libre-office
+#   include: libre-office.yml
 
 - name: Install alfresco
   include: alfresco.yml
 
-- name: Install nginx
-  include: nginx.yml
+# - name: Install nginx
+#   include: nginx.yml
